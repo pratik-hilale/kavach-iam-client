@@ -1,0 +1,10 @@
+# Python build artifacts
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# Local environment
+.venv/
+.env
