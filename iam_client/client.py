@@ -1,8 +1,7 @@
-import requests
+import httpx
 from typing import Optional
 from .schemas import IAMUser, TokenIntrospection
 from .exceptions import IAMUnauthorized, IAMUnavailable
-
 
 class IAMClient:
     def __init__(
@@ -17,18 +16,20 @@ class IAMClient:
         self.tenant_slug = tenant_slug
         self.client_id = client_id
         self.client_secret = client_secret
-        self.timeout = timeout
+        self.timeout = httpx.Timeout(timeout)
         self._client_token: Optional[str] = None
+        # Use a persistent client for connection pooling
+        self.api_client = httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout)
 
-    def _get_client_token(self) -> str:
-        resp = requests.post(
-            f"{self.base_url}/auth/client-token",
+    async def _get_client_token(self) -> str:
+        """Asynchronously fetch the service-to-service token."""
+        resp = await self.api_client.post(
+            "/auth/client-token",
             json={
                 "tenant_slug": self.tenant_slug,
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
             },
-            timeout=self.timeout,
         )
 
         if resp.status_code != 200:
@@ -36,17 +37,30 @@ class IAMClient:
 
         return resp.json()["access_token"]
 
-    def _headers(self):
+    async def _get_auth_headers(self):
+        """Ensure token exists and return headers."""
         if not self._client_token:
-            self._client_token = self._get_client_token()
+            self._client_token = await self._get_client_token()
         return {"Authorization": f"Bearer {self._client_token}"}
 
-    def get_user(self, user_id: str) -> IAMUser:
-        resp = requests.get(
-            f"{self.base_url}/users/{user_id}",
-            headers=self._headers(),
-            timeout=self.timeout,
+    async def get_user(self, user_id: str) -> IAMUser:
+        """The standard approach for fetching a user by UUID."""
+        headers = await self._get_auth_headers()
+        
+        # Note: We use the standardized path /{user_id} here
+        resp = await self.api_client.get(
+            f"/users/{user_id}",
+            headers=headers
         )
+
+        if resp.status_code == 404:
+            # Handle 404 gracefully or raise a specific exception
+            return None 
         if resp.status_code != 200:
-            raise IAMUnavailable("Failed to fetch user")
+            raise IAMUnavailable(f"IAM API returned {resp.status_code}")
+
         return IAMUser(**resp.json())
+
+    async def close(self):
+        """Clean up the underlying connection pool."""
+        await self.api_client.aclose()
