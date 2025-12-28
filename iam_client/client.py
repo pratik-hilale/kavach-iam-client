@@ -43,7 +43,7 @@ class IAMClient:
 
     def get_user(self, user_id: str) -> IAMUser:
         resp = requests.get(
-            f"{self.base_url}/users/user_id={user_id}",
+            f"{self.base_url}/users/{user_id}",
             headers=self._headers(),
             timeout=self.timeout,
         )
