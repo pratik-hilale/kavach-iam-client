@@ -23,7 +23,7 @@ class IAMClient:
     def _get_client_token(self) -> str:
         resp = requests.post(
             f"{self.base_url}/auth/client-token",
-            data={
+            json={
                 "tenant_slug": self.tenant_slug,
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
