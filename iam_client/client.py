@@ -18,11 +18,11 @@ class IAMClient:
         self.client_id = client_id
         self.client_secret = client_secret
         self.timeout = timeout
-        self._service_token: Optional[str] = None
+        self._client_token: Optional[str] = None
 
-    def _get_service_token(self) -> str:
+    def _get_client_token(self) -> str:
         resp = requests.post(
-            f"{self.base_url}/auth/service-token",
+            f"{self.base_url}/auth/client-token",
             json={
                 "tenant_slug": self.tenant_slug,
                 "client_id": self.client_id,
@@ -32,14 +32,14 @@ class IAMClient:
         )
 
         if resp.status_code != 200:
-            raise IAMUnauthorized("Failed to get service token")
+            raise IAMUnauthorized("Failed to get client token")
 
         return resp.json()["access_token"]
 
     def _headers(self):
-        if not self._service_token:
-            self._service_token = self._get_service_token()
-        return {"Authorization": f"Bearer {self._service_token}"}
+        if not self._client_token:
+            self._client_token = self._get_client_token()
+        return {"Authorization": f"Bearer {self._client_token}"}
 
     def get_user(self, user_id: str) -> IAMUser:
         resp = requests.get(
