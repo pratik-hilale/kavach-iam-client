@@ -1,66 +1,124 @@
+import time
+import uuid
+import logging
+from typing import Optional, Union
+
 import httpx
-from typing import Optional
+import jwt
+from jwt import PyJWKClient
+
+from .exceptions import (
+    IAMError, IAMUnauthorized, IAMAPIError, 
+    IAMUnavailable, IAMTokenError
+)
 from .schemas import IAMUser, TokenIntrospection
-from .exceptions import IAMUnauthorized, IAMUnavailable
+
+logger = logging.getLogger("iam_client")
 
 class IAMClient:
+    """Production-grade modular IAM Client (Organization based)."""
+    
     def __init__(
         self,
         base_url: str,
-        tenant_slug: str,
+        org_slug: str,
         client_id: str,
         client_secret: str,
         timeout: int = 5,
     ):
         self.base_url = base_url.rstrip("/")
-        self.tenant_slug = tenant_slug
+        self.org_slug = org_slug
         self.client_id = client_id
         self.client_secret = client_secret
         self.timeout = httpx.Timeout(timeout)
+        
         self._client_token: Optional[str] = None
-        # Use a persistent client for connection pooling
-        self.api_client = httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout)
+        self._token_expires_at: float = 0
+        
+        self.api_client = httpx.AsyncClient(
+            base_url=self.base_url, 
+            timeout=self.timeout,
+            headers={"User-Agent": "IAM-Client-Python/1.1"}
+        )
+        
+        self.jwks_client = PyJWKClient(f"{self.base_url}/.well-known/jwks.json")
 
     async def _get_client_token(self) -> str:
-        """Asynchronously fetch the service-to-service token."""
-        resp = await self.api_client.post(
-            "/auth/client-token",
-            json={
-                "tenant_slug": self.tenant_slug,
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-            },
-        )
+        """Fetch a fresh service-to-service token."""
+        try:
+            # Internal mapping: 'org_slug' maps to 'tenant_slug' for backward API compatibility
+            resp = await self.api_client.post(
+                "/auth/client-token",
+                json={
+                    "tenant_slug": self.org_slug,
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                },
+            )
+            
+            if resp.status_code == 401:
+                raise IAMUnauthorized("Invalid client credentials or organization slug")
+            
+            if resp.status_code != 200:
+                raise IAMAPIError(resp.status_code, resp.text)
 
-        if resp.status_code != 200:
-            raise IAMUnauthorized("Failed to get client token")
+            data = resp.json()
+            token = data["access_token"]
+            expires_in = data.get("expires_in", 900)
+            
+            self._client_token = token
+            self._token_expires_at = time.time() + expires_in - 30
+            return token
+            
+        except httpx.RequestError as e:
+            raise IAMUnavailable(f"Connection failed: {e}")
 
-        return resp.json()["access_token"]
-
-    async def _get_auth_headers(self):
-        """Ensure token exists and return headers."""
-        if not self._client_token:
-            self._client_token = await self._get_client_token()
+    async def _get_auth_headers(self) -> dict:
+        if not self._client_token or time.time() > self._token_expires_at:
+            await self._get_client_token()
         return {"Authorization": f"Bearer {self._client_token}"}
 
-    async def get_user(self, user_id: str) -> IAMUser:
-        """The standard approach for fetching a user by UUID."""
+    async def get_user(self, user_id: Union[str, uuid.UUID]) -> Optional[IAMUser]:
         headers = await self._get_auth_headers()
         
-        # Note: We use the standardized path /{user_id} here
-        resp = await self.api_client.get(
-            f"/users/{user_id}",
-            headers=headers
-        )
+        try:
+            resp = await self.api_client.get(
+                f"/users/{user_id}",
+                headers=headers
+            )
 
-        if resp.status_code == 404:
-            # Handle 404 gracefully or raise a specific exception
-            return None 
-        if resp.status_code != 200:
-            raise IAMUnavailable(f"IAM API returned {resp.status_code}")
+            if resp.status_code == 404:
+                return None 
+            if resp.status_code != 200:
+                raise IAMAPIError(resp.status_code, resp.text)
 
-        return IAMUser(**resp.json())
+            return IAMUser.model_validate(resp.json())
+        except httpx.RequestError as e:
+            raise IAMUnavailable(f"Request to IAM failed: {e}")
+
+    def verify_token_locally(self, token: str) -> TokenIntrospection:
+        """Verify a JWT locally using JWKS (No network call required)."""
+        try:
+            signing_key = self.jwks_client.get_signing_key_from_jwt(token)
+            
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                options={"verify_aud": False}
+            )
+            
+            return TokenIntrospection(
+                active=True,
+                sub=payload["sub"],
+                org_id=uuid.UUID(payload.get("tenant_id") or payload.get("org_id")),
+                client_id=payload.get("client_id"),
+                roles=payload.get("roles", []),
+                scopes=payload.get("scopes", []),
+                type=payload.get("type", "access")
+            )
+        except (jwt.PyJWTError, KeyError, ValueError) as e:
+            raise IAMTokenError(f"Token verification failed: {e}")
 
     async def close(self):
-        """Clean up the underlying connection pool."""
         await self.api_client.aclose()
