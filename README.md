@@ -26,31 +26,33 @@ Identity and Access Management (IAM) system using **service credentials**.
 pip install git+https://github.com/YOUR_ORG/iam-client.git
 ```
 
-
 ### Install directly from GitHub
 
 ```bash
 pip install git+https://github.com/YOUR_ORG/iam-client.git@v0.1.0
 ```
 
-
 ## ✨ Configuration
+
 Set the following environment variables in the consuming backend service:
+
 ```
 IAM_BASE_URL=https://iam.xyz.com
-TENANT_SLUG=xyz
+ORG_SLUG=xyz
 IAM_CLIENT_ID=xyz-backend
 IAM_CLIENT_SECRET=super-secret
 ```
 
 ## ✨ Usage
+
 ### Create IAM client (once per service)
+
 ```
 from iam_client.client import IAMClient
 
 iam = IAMClient(
     base_url="https://iam.xyz.com",
-    tenant_slug="xyz",
+    org_slug="xyz",
     client_id="xyz-backend",
     client_secret="super-secret",
 )

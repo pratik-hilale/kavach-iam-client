@@ -46,11 +46,10 @@ class IAMClient:
     async def _get_client_token(self) -> str:
         """Fetch a fresh service-to-service token."""
         try:
-            # Internal mapping: 'org_slug' maps to 'tenant_slug' for backward API compatibility
             resp = await self.api_client.post(
                 "/auth/client-token",
                 json={
-                    "tenant_slug": self.org_slug,
+                    "org_slug": self.org_slug,
                     "client_id": self.client_id,
                     "client_secret": self.client_secret,
                 },
@@ -111,7 +110,7 @@ class IAMClient:
             return TokenIntrospection(
                 active=True,
                 sub=payload["sub"],
-                org_id=uuid.UUID(payload.get("tenant_id") or payload.get("org_id")),
+                org_id=uuid.UUID(payload.get("org_id")),
                 client_id=payload.get("client_id"),
                 roles=payload.get("roles", []),
                 scopes=payload.get("scopes", []),
